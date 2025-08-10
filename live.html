@@ -1,80 +1,286 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Video Gamer Vertical</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Live Gamer — Fondo RGB + Corrección de Mirada</title>
 <style>
-    body {
-        margin: 0;
-        padding: 0;
-        background: black;
-        overflow: hidden;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-    }
-    #canvas {
-        width: 100vw;
-        height: 100vh;
-        object-fit: cover;
-    }
-    video {
-        display: none;
-    }
+  :root{--btn:#2563eb}
+  html,body{height:100%;margin:0;background:#000;color:#fff;font-family:system-ui,Segoe UI,Roboto,Arial}
+  .wrap{height:100%;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;padding:12px;box-sizing:border-box}
+  .stage{position:relative;width:100%;max-width:420px;aspect-ratio:9/16;border-radius:12px;overflow:hidden;background:#000;box-shadow:0 8px 30px rgba(0,0,0,0.6)}
+  canvas, video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  video{display:none}
+  .controls{width:100%;max-width:420px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  button,input{font-size:15px;padding:10px 12px;border-radius:10px;border:0;background:var(--btn);color:#fff}
+  #status{width:100%;max-width:420px;font-size:13px;background:#071029;padding:8px;border-radius:8px;color:#9fc0ff;white-space:pre-wrap}
+  .small{font-size:12px;padding:6px 10px}
 </style>
 </head>
 <body>
-<video id="videoInput" autoplay playsinline></video>
-<canvas id="canvas"></canvas>
+  <div class="wrap">
+    <div class="stage" id="stage">
+      <!-- Cámara source (hidden) -->
+      <video id="cam" autoplay playsinline></video>
+      <!-- Canvas final 720x1280 -->
+      <canvas id="out" width="720" height="1280"></canvas>
+    </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+    <div class="controls">
+      <button id="startRec">▶ Grabar</button>
+      <button id="stopRec" class="small" disabled>■ Detener</button>
+      <button id="snap" class="small">📸 Foto</button>
+      <button id="toggleMask" class="small">🔁 Mostrar máscara</button>
+      <button id="help" class="small">❓ Ayuda</button>
+    </div>
+
+    <div id="status">Cargando modelos… espera un momento.</div>
+  </div>
+
+  <!-- MediaPipe (Selfie Segmentation + FaceMesh + Camera) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+
 <script>
-    const video = document.getElementById('videoInput');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
+(async ()=>{
 
-    async function initCamera() {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-        video.srcObject = stream;
-    }
+// UI
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('startRec');
+const stopBtn = document.getElementById('stopRec');
+const snapBtn = document.getElementById('snap');
+const toggleMaskBtn = document.getElementById('toggleMask');
 
-    async function loadModels() {
-        await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/');
-    }
+function log(s){ statusEl.textContent = s; }
 
-    function drawBackground() {
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, "#0f0c29");
-        gradient.addColorStop(0.5, "#302b63");
-        gradient.addColorStop(1, "#24243e");
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
+// Elements & sizing (we force 720x1280 internal)
+const cam = document.getElementById('cam');
+const canvas = document.getElementById('out');
+const ctx = canvas.getContext('2d');
+const W = 720, H = 1280;
+canvas.width = W; canvas.height = H;
 
-    async function detectFace() {
-        const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
-        drawBackground();
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+// Offscreen user canvas for masking
+const userCanvas = document.createElement('canvas');
+userCanvas.width = W; userCanvas.height = H;
+const uctx = userCanvas.getContext('2d');
 
-        if (detections) {
-            ctx.strokeStyle = "lime";
-            ctx.lineWidth = 2;
-            const box = detections.box;
-            ctx.strokeRect(box.x, box.y, box.width, box.height);
-        }
-        requestAnimationFrame(detectFace);
-    }
+// state
+let latestMask = null;
+let latestLandmarks = null;
+let showMask = false;
+let prevOffset = {x:0,y:0};
+let smoothing = 0.85;
 
-    async function start() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        await initCamera();
-        await loadModels();
-        detectFace();
-    }
+// Animated RGB background (procedural, cheap)
+let bgTick = 0;
+function drawAnimatedBG(ctx, w, h, t){
+  // soft moving radial gradients + bars for gamer vibe
+  const g = ctx.createLinearGradient(0,0,w,h);
+  const r = Math.floor(120 + 120*Math.sin(t*0.002));
+  const gcol = Math.floor(50 + 120*Math.sin(t*0.0017+1));
+  const b = Math.floor(120 + 120*Math.cos(t*0.0013));
+  g.addColorStop(0, `rgba(${r},${20},${b},0.9)`);
+  g.addColorStop(0.5, `rgba(20,${gcol},${b},0.85)`);
+  g.addColorStop(1, `rgba(10,10,40,0.95)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,w,h);
 
-    start();
+  // animated neon bars
+  for(let i=0;i<6;i++){
+    const pos = (t*0.02 + i*0.3) % 1;
+    const x = -w*0.4 + (w*1.8)*pos;
+    const grad = ctx.createLinearGradient(x,0,x+200,0);
+    grad.addColorStop(0, `rgba(${r},${gcol},${b},0)`);
+    grad.addColorStop(0.5, `rgba(${r},${gcol},${b},0.12)`);
+    grad.addColorStop(1, `rgba(${r},${gcol},${b},0)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, h*0.1 + i*(h*0.12), 300, h*0.08);
+  }
+
+  // subtle vignette
+  const rad = ctx.createRadialGradient(w/2,h/2,100,w/2,h/2,Math.max(w,h)*0.9);
+  rad.addColorStop(0, 'rgba(255,255,255,0)');
+  rad.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = rad;
+  ctx.fillRect(0,0,w,h);
+}
+
+// MediaPipe setup
+log('Cargando modelos MediaPipe… (esto puede tardar 2-6s)');
+
+const selfie = new SelfieSegmentation({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`});
+selfie.setOptions({modelSelection:1, refineFaceLandmarks:false});
+selfie.onResults((res)=> {
+  // segmentationMask is an ImageBitmap-like drawable
+  latestMask = res.segmentationMask;
+});
+
+const facemesh = new FaceMesh({locateFile: (f)=> `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`});
+facemesh.setOptions({maxNumFaces:1, refineLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5});
+facemesh.onResults(r=>{
+  latestLandmarks = (r.multiFaceLandmarks && r.multiFaceLandmarks.length) ? r.multiFaceLandmarks[0] : null;
+});
+
+// Camera pipeline (video only)
+const camera = new Camera(cam, {
+  onFrame: async () => {
+    await selfie.send({image: cam});
+    await facemesh.send({image: cam});
+  },
+  width: W,
+  height: H
+});
+
+try {
+  camera.start();
+  log('Cámara iniciada. Esperando primeros frames…');
+} catch (e){
+  log('Error al iniciar cámara: ' + e.message + '\nPrueba en Chrome/Edge y permite la cámara.');
+  return;
+}
+
+// smoothing helpers
+function avgIndices(landmarks, indices){
+  const p = {x:0,y:0,z:0};
+  indices.forEach(i=>{ p.x += landmarks[i].x; p.y += landmarks[i].y; p.z += landmarks[i].z; });
+  const n = indices.length;
+  return {x: p.x/n, y: p.y/n, z: p.z/n};
+}
+
+// draw loop: background -> masked user (with correction) -> optional mask overlay
+let recordingChunks = [];
+let mediaRecorder = null;
+
+function drawLoop(now){
+  bgTick = now;
+  // 1) draw animated background to main ctx
+  drawAnimatedBG(ctx, W, H, now);
+
+  // 2) prepare user image on offscreen canvas, applying gaze correction transform
+  uctx.clearRect(0,0,W,H);
+
+  // compute offset from landmarks
+  let offsetX = 0, offsetY = 0, scale = 1;
+  if (latestLandmarks){
+    // stable eye center using several indices
+    const left = avgIndices(latestLandmarks, [33,133,159,145]); // left eye cluster
+    const right = avgIndices(latestLandmarks, [362,263,386,374]); // right eye cluster
+    const eyeCenter = {x: (left.x+right.x)/2 * W, y: (left.y+right.y)/2 * H};
+    const desired = {x: W*0.5, y: H*0.45}; // desired visual center (slightly above center)
+    const rawOffX = (desired.x - eyeCenter.x);
+    const rawOffY = (desired.y - eyeCenter.y);
+
+    // gentle strength depending on how far eyes are
+    const strength = 0.35; // tune between 0..1
+    offsetX = rawOffX * strength;
+    offsetY = rawOffY * strength;
+
+    // scale a bit if eyes very low (make "look-at-camera" slightly larger eyes)
+    const eyeNormY = (eyeCenter.y / H);
+    scale = 1 + Math.max(0, (0.5 - eyeNormY)) * 0.12; // small scale up when eyes lower
+  }
+
+  // smoothing
+  prevOffset.x = prevOffset.x * smoothing + offsetX * (1 - smoothing);
+  prevOffset.y = prevOffset.y * smoothing + offsetY * (1 - smoothing);
+
+  // Draw the camera frame onto user canvas with transform
+  uctx.save();
+  // center transform for scaling
+  uctx.translate(W/2 + prevOffset.x, H/2 + prevOffset.y);
+  uctx.scale(scale, scale);
+  uctx.translate(-W/2, -H/2);
+  uctx.drawImage(cam, 0, 0, W, H);
+  uctx.restore();
+
+  // apply segmentation mask (destination-in keeps the person)
+  if (latestMask){
+    uctx.globalCompositeOperation = 'destination-in';
+    uctx.drawImage(latestMask, 0, 0, W, H);
+    uctx.globalCompositeOperation = 'source-over';
+  }
+
+  // Finally draw the masked user over the background
+  ctx.drawImage(userCanvas, 0, 0, W, H);
+
+  // optional: show faint outline for debugging (toggle)
+  if (showMask && latestMask){
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.drawImage(latestMask, 0, 0, W, H);
+    ctx.restore();
+  }
+
+  requestAnimationFrame(drawLoop);
+}
+requestAnimationFrame(drawLoop);
+
+// Recording: combine canvas stream + mic audio
+async function startRecording(){
+  try{
+    const audioStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const canvasStream = canvas.captureStream(25);
+    const tracks = [...canvasStream.getVideoTracks(), ...audioStream.getAudioTracks()];
+    const combined = new MediaStream(tracks);
+
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus') ? 'video/webm;codecs=vp8,opus' : 'video/webm';
+    mediaRecorder = new MediaRecorder(combined, {mimeType: mime});
+    recordingChunks = [];
+    mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recordingChunks.push(e.data); };
+    mediaRecorder.onstop = ()=>{
+      const blob = new Blob(recordingChunks, {type: 'video/webm'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'gamer_live.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+      log('Grabación lista. Archivo descargado.');
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+    };
+    mediaRecorder.start();
+    log('Grabando… presiona "Detener" para terminar.');
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+  }catch(err){
+    log('No se pudo iniciar la grabación: ' + err.message);
+  }
+}
+
+function stopRecording(){
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+}
+
+// snapshots
+function takeSnapshot(){
+  canvas.toBlob(blob=>{
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'snapshot.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    log('Foto tomada y descargada.');
+  }, 'image/png');
+}
+
+// UI events
+startBtn.onclick = startRecording;
+stopBtn.onclick = stopRecording;
+snapBtn.onclick = takeSnapshot;
+toggleMaskBtn.onclick = ()=>{ showMask = !showMask; toggleMaskBtn.textContent = showMask ? '🔁 Ocultar máscara' : '🔁 Mostrar máscara'; };
+
+// small help dialog
+document.getElementById('help').onclick = ()=>{
+  alert('Instrucciones:\\n1) Abre esto en Chrome/Edge (móvil o PC).\\n2) Permite cámara y micrófono.\\n3) Espera a que carguen los modelos.\\n4) Usa "Grabar" para capturar video + audio.\\nNotas: la corrección de mirada es suave, no perfecta; baja la fuerza en el código si ves movimientos bruscos.');
+};
+
+// final log once models ready
+log('Modelos cargados. Da permisos a cámara y micrófono. Pulsa ▶ Grabar para guardar el resultado.');
+
+// end IIFE
+})();
 </script>
 </body>
 </html>
