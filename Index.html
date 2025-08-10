@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cortador de Videos - Clips de 1 minuto</title>
+  <title>Cortador de Videos Verticales 9:16 - Clips de 1 minuto</title>
   <style>
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -18,72 +18,88 @@
     }
     h1 {
       margin-bottom: 0.5em;
+      text-align: center;
+      font-weight: 900;
+      font-size: 1.8rem;
+      color: #3b82f6;
+      text-shadow: 0 0 10px #3b82f6;
     }
-    input[type=file] {
+    input[type=file], input[type=text] {
       background: #1f1f1f;
       border: none;
-      padding: 10px 15px;
+      padding: 12px 15px;
       color: #eee;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-    input[type=text] {
-      margin-top: 10px;
-      padding: 10px;
-      width: 300px;
-      border-radius: 6px;
-      border: none;
-      background: #1f1f1f;
-      color: #eee;
+      border-radius: 8px;
       font-size: 1rem;
+      margin-top: 10px;
+      width: 320px;
+      max-width: 90vw;
+      box-sizing: border-box;
+      transition: background-color 0.3s ease;
+    }
+    input[type=file]:hover, input[type=text]:hover {
+      background: #2a2a2a;
     }
     button {
-      margin-top: 15px;
-      padding: 12px 25px;
-      background: #3b82f6;
+      margin-top: 20px;
+      padding: 15px 30px;
+      background: linear-gradient(45deg, #3b82f6, #2563eb);
       border: none;
-      border-radius: 8px;
+      border-radius: 12px;
       color: white;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
-      font-size: 1rem;
-      transition: background-color 0.3s ease;
+      font-size: 1.1rem;
+      box-shadow: 0 4px 15px rgba(59,130,246,0.7);
+      transition: background 0.4s ease;
     }
     button:disabled {
       background: #555;
       cursor: not-allowed;
+      box-shadow: none;
     }
     button:hover:not(:disabled) {
-      background: #2563eb;
+      background: linear-gradient(45deg, #2563eb, #1e40af);
     }
     #clips {
       margin-top: 30px;
       width: 100%;
-      max-width: 600px;
+      max-width: 640px;
       display: flex;
       flex-wrap: wrap;
-      gap: 15px;
+      gap: 20px;
+      justify-content: center;
     }
     .clip {
       background: #1f1f1f;
-      border-radius: 10px;
-      padding: 10px;
-      width: calc(50% - 15px);
+      border-radius: 15px;
+      padding: 12px;
+      width: 280px;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
+      box-shadow: 0 0 10px rgba(59,130,246,0.5);
+      transition: transform 0.3s ease;
+    }
+    .clip:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 20px #3b82f6;
     }
     video {
       width: 100%;
-      border-radius: 8px;
+      aspect-ratio: 9 / 16;
+      border-radius: 12px;
       background: black;
+      box-shadow: 0 0 10px #111;
     }
     a.download-link {
       color: #3b82f6;
-      font-weight: 600;
+      font-weight: 700;
       text-decoration: none;
+      font-size: 1rem;
+      user-select: none;
     }
     a.download-link:hover {
       text-decoration: underline;
@@ -91,12 +107,13 @@
     #progress {
       margin-top: 20px;
       width: 100%;
-      max-width: 600px;
+      max-width: 640px;
       background: #222;
-      border-radius: 10px;
+      border-radius: 15px;
       overflow: hidden;
-      height: 18px;
+      height: 22px;
       display: none;
+      box-shadow: inset 0 0 8px #000;
     }
     #progress-bar {
       height: 100%;
@@ -108,9 +125,9 @@
 </head>
 <body>
 
-  <h1>Cortador de Video en Clips de 1 Minuto</h1>
+  <h1>Cortador de Video Vertical 9:16 - Clips de 1 Minuto</h1>
   <input type="file" id="videoInput" accept="video/*" />
-  <input type="text" id="overlayText" placeholder="Texto que aparecerá en cada clip" />
+  <input type="text" id="overlayText" placeholder="Texto que aparecerá en cada clip (opcional)" />
 
   <button id="processBtn" disabled>Procesar Video</button>
 
@@ -123,7 +140,12 @@
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.8/dist/ffmpeg.min.js"></script>
   <script>
     const { createFFmpeg, fetchFile } = FFmpeg;
-    const ffmpeg = createFFmpeg({ log: true });
+    const ffmpeg = createFFmpeg({
+      log: false,
+      progress: ({ ratio }) => {
+        progressBar.style.width = `${(ratio * 100).toFixed(2)}%`;
+      }
+    });
 
     const videoInput = document.getElementById('videoInput');
     const processBtn = document.getElementById('processBtn');
@@ -139,6 +161,8 @@
       clipsContainer.innerHTML = '';
       overlayTextInput.value = '';
       processBtn.disabled = true;
+      videoDuration = 0;
+      videoFile = null;
 
       if (e.target.files.length > 0) {
         videoFile = e.target.files[0];
@@ -153,6 +177,10 @@
           URL.revokeObjectURL(url);
           processBtn.disabled = false;
         };
+        tempVideo.onerror = () => {
+          alert('No se pudo cargar el video. Intenta con otro archivo.');
+          URL.revokeObjectURL(url);
+        };
       }
     });
 
@@ -163,66 +191,69 @@
       progressContainer.style.display = 'block';
       progressBar.style.width = '0%';
 
-      if (!ffmpeg.isLoaded()) {
-        await ffmpeg.load();
+      try {
+        if (!ffmpeg.isLoaded()) {
+          await ffmpeg.load();
+        }
+
+        const inputName = 'input' + videoFile.name.match(/\.\w+$/)[0];
+        ffmpeg.FS('writeFile', inputName, await fetchFile(videoFile));
+
+        const clipsCount = Math.ceil(videoDuration / 60);
+        const overlayText = overlayTextInput.value.trim();
+
+        for (let i = 0; i < clipsCount; i++) {
+          const start = i * 60;
+          const duration = (start + 60) > videoDuration ? videoDuration - start : 60;
+          const outputName = `clip_${i + 1}.mp4`;
+
+          // Filtros: crop para 9:16 vertical y drawtext si hay texto
+          // Se asume que el video original es horizontal o cualquier resolución
+          // Se centra el crop horizontalmente y ajusta la altura para 9:16
+          // drawtext se pone abajo centrado con sombra
+
+          // Comando filter_complex
+          let filter = `crop='ih*9/16:ih:(in_w-(ih*9/16))/2:0'`; // Crop para 9:16 vertical basado en altura
+
+          if (overlayText) {
+            // Para evitar problemas con comillas en texto, escapamos caracteres simples
+            const safeText = overlayText.replace(/'/g, "\\\\'");
+            filter += `,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${safeText}':fontcolor=white:fontsize=28:box=1:boxcolor=black@0.6:boxborderw=5:x=(w-text_w)/2:y=h-60`;
+          }
+
+          await ffmpeg.run(
+            '-ss', `${start}`,
+            '-t', `${duration}`,
+            '-i', inputName,
+            '-vf', filter,
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            outputName
+          );
+
+          const data = ffmpeg.FS('readFile', outputName);
+          const videoBlob = new Blob([data.buffer], { type: 'video/mp4' });
+          const videoUrl = URL.createObjectURL(videoBlob);
+
+          const clipElem = document.createElement('div');
+          clipElem.className = 'clip';
+          clipElem.innerHTML = `
+            <video controls src="${videoUrl}"></video>
+            <a class="download-link" href="${videoUrl}" download="${outputName}">Descargar Clip ${i + 1}</a>
+          `;
+          clipsContainer.appendChild(clipElem);
+        }
+
+        alert('¡Procesamiento completado! Puedes descargar los clips.');
+      } catch (err) {
+        console.error(err);
+        alert('Error al procesar el video. Intenta con otro archivo o revisa la consola.');
+      } finally {
+        progressContainer.style.display = 'none';
+        processBtn.disabled = false;
       }
-
-      const inputName = 'input_video' + videoFile.name.match(/\.\w+$/)[0];
-      ffmpeg.FS('writeFile', inputName, await fetchFile(videoFile));
-
-      // Cortar en clips de 60 segundos (1 minuto)
-      const clipsCount = Math.ceil(videoDuration / 60);
-      const overlayText = overlayTextInput.value.trim();
-
-      for (let i = 0; i < clipsCount; i++) {
-        const start = i * 60;
-        const duration = (start + 60) > videoDuration ? videoDuration - start : 60;
-
-        // Archivo salida
-        const outputName = `clip_${i + 1}.mp4`;
-
-        // Comando ffmpeg para cortar y añadir texto:
-        // Drawtext requiere fuente instalada o una fuente estándar.
-        // Aquí usamos drawtext para superponer texto en la parte inferior del video.
-        const drawTextCmd = overlayText
-          ? `-vf drawtext=text='${overlayText}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-text_w)/2:y=h-40`
-          : '';
-
-        await ffmpeg.run(
-          '-ss', `${start}`,
-          '-t', `${duration}`,
-          '-i', inputName,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-c:a', 'aac',
-          ...(overlayText ? ['-vf', `drawtext=text='${overlayText}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=5:x=(w-text_w)/2:y=h-40`] : []),
-          outputName
-        );
-
-        // Leer archivo generado
-        const data = ffmpeg.FS('readFile', outputName);
-
-        // Crear blob para video
-        const videoBlob = new Blob([data.buffer], { type: 'video/mp4' });
-        const videoUrl = URL.createObjectURL(videoBlob);
-
-        // Mostrar clip y link de descarga
-        const clipElem = document.createElement('div');
-        clipElem.className = 'clip';
-        clipElem.innerHTML = `
-          <video controls src="${videoUrl}"></video>
-          <a class="download-link" href="${videoUrl}" download="${outputName}">Descargar Clip ${i + 1}</a>
-        `;
-        clipsContainer.appendChild(clipElem);
-
-        // Actualizar barra progreso
-        const progressPercent = Math.round(((i + 1) / clipsCount) * 100);
-        progressBar.style.width = `${progressPercent}%`;
-      }
-
-      progressContainer.style.display = 'none';
-      processBtn.disabled = false;
-      alert('¡Procesamiento completado! Puedes descargar los clips.');
     });
   </script>
 
